@@ -9,8 +9,10 @@
     more information.
 """
 
+import os
+import sys
 import random
-import struct
+import traceback
 
 import compiler
 import builtins
@@ -38,9 +40,14 @@ class InterpreterRuntimeError(InterpreterError):
         raised.
     """
 
-    def __init__(self, interpreter, reason):
+    def __init__(self, interpreter, reason, info):
         self.interpreter = interpreter
         self.reason = reason
+
+        exc_type, exc_obj, traceback = info
+        self.exc_type = exc_type
+        self.exc_obj = exc_obj
+        self.traceback = traceback
 
     def __str__(self):
         # Produce frame snapshots
@@ -74,7 +81,7 @@ class InterpreterRuntimeError(InterpreterError):
         Program Disassembly:
         %s
 
-        """ % (self.reason, self.interpreter.stack, self.interpreter.instruction_pointer, snapshots,
+        """ % (repr(self.reason), self.interpreter.stack, self.interpreter.instruction_pointer, snapshots,
         len(self.interpreter.codeblock.payload), disassembly)
 
         return output
@@ -156,8 +163,7 @@ class Interpreter(object):
                     self.jump_target = None
 
                 if (self.stack_debug is True):
-                    self.frame_snapshots.append((self.stack, self.instruction_pointer))
-                    print("EIP %u (%s): %s" % (self.instruction_pointer, self.codeblock.payload[self.instruction_pointer], self.stack))
+                    self.frame_snapshots.append((list(self.stack), self.instruction_pointer))
 
                 line = self.codeblock.payload[self.instruction_pointer]
                 if (line not in self.commands):
@@ -169,9 +175,11 @@ class Interpreter(object):
                 if (self.command_count >= self.command_maximum and self.command_maximum > 0):
                     print("Terminated: Maximum of %u commands exceeded." % self.command_maximum)
                     return
+
                 self.command_count = self.command_count + 1
         except StandardError as e:
-            raise InterpreterRuntimeError(self, e)
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            raise InterpreterRuntimeError(self, e, (exc_type, exc_obj, exc_tb))
 
         self.codeblock = None
 
@@ -184,10 +192,11 @@ class Interpreter(object):
         self.commands["swap"] = builtins.swap
         self.commands["pop"] = builtins.pop
         self.commands["dup"] = builtins.dup
-        self.commands["random"] = builtins.random
+        self.commands["random"] = builtins.randint
 
         # Arithmetic
         self.commands["+"] = builtins.add
+        self.commands["-"] = builtins.sub
         self.commands["*"] = builtins.mult
         self.commands["/"] = builtins.div
         self.commands["%"] = builtins.mod
@@ -202,5 +211,6 @@ class Interpreter(object):
         self.commands["@"] = builtins.fetch
 
         # Debug
+        self.commands["print"] = builtins.println
         self.commands["_stack"] = builtins.print_stack
         self.commands["nop"] = builtins.nop

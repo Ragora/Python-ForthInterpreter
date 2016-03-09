@@ -9,9 +9,12 @@
     more information.
 """
 
+import struct
+import random
+
 def strcat(interp):
-    rhs = interp.stack.pop()
-    lhs = interp.stack.pop()
+    rhs = str(interp.stack.pop())
+    lhs = str(interp.stack.pop())
     interp.stack.append(lhs + rhs)
 
 def swap(interp):
@@ -26,7 +29,7 @@ def pop(interp):
 def dup(interp):
     interp.stack.append(interp.stack[len(interp.stack) - 1])
 
-def random(interp):
+def randint(interp):
     interp.stack.append(struct.unpack("<L", random._urandom(4))[0])
 
 def add(interp):
@@ -49,10 +52,13 @@ def div(interp):
     lhs = int(interp.stack.pop())
     interp.stack.append(lhs / rhs)
 
+def println(interp):
+    print(interp.stack.pop())
+
 def mod(interp):
     rhs = int(interp.stack.pop())
     lhs = int(interp.stack.pop())
-    interp.stack.append(lhs / rhs)
+    interp.stack.append(lhs % rhs)
 
 def store(interp):
     key = interp.stack.pop()
@@ -82,8 +88,6 @@ def ifblock(interp):
 
     if (condition == 0):
         interp.jump_target = interp.instruction_pointer + false_jump
-
-        #print(interp.codeblock.payload[interp.instru])
 
 def equals(interp):
     rhs = interp.stack.pop()

@@ -13,6 +13,6 @@ class Application(object):
             #print(string.join(block.payload, "\n"))
             interp.execute(block)
 
-            #print(interp.stack)
+            print(interp.stack)
 if __name__ == "__main__":
     Application().main()

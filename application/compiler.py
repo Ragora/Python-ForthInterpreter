@@ -122,7 +122,7 @@ class Compiler(object):
 
                 # Write the jump payloads to offset the else and the then blocks by +2
                 payload.insert(else_start, str(then_offset + 1))
-                payload.insert(current_if, str(else_offset + 3))
+                payload.insert(current_if, str(else_offset + 2))
 
                 # Loop foreach jump below us and correct their jump offsets by +2
                 for iteration in range(then_offset + 1, len(payload)):
