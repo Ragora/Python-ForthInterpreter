@@ -12,8 +12,50 @@
 import re
 import string
 
-class CodeBlock(object):
-    name = None
+class CompilerError(Exception):
+    """
+        Exception representing a compiler error.
+    """
+
+    pass
+
+class CodeNumber(object):
+    """
+        A class representing a regular number in the FORTH program.
+    """
+
+    data = None
+    """
+        The raw number.
+    """
+
+    def __init__(self, number):
+        self.data = number
+
+    def __repr__(self):
+        return "<CodeNumber %f>" % self.data
+
+class CodeString(object):
+    """
+        A class representing a regular old string in the FORTH program.
+    """
+
+    data = None
+    """
+        The raw string data.
+    """
+
+    def __init__(self, data):
+        self.data = data
+
+    def __repr__(self):
+        return "<CodeString \"%s\">" % self.data
+
+class Callable(object):
+    """
+        A class representing a callable block of FORTH code.
+    """
+
     payload = None
 
     global_variables = None
@@ -26,192 +68,210 @@ class CodeBlock(object):
         A list of all local variables declared on this specific codeblock.
     """
 
-    def __init__(self, name, payload):
-        self.name = name
+    def disassemble(self):
+        result = ""
+
+        for op in self.payload:
+            if type(op) is CodeString:
+                result += "\t\"%s\"\n" % op.data
+            elif type(op) is CodeNumber:
+                result += "\t%f\n" % op.data
+            else:
+                result += "\t%s\n" % op
+
+        return result
+
+    def __init__(self, payload):
         self.payload = payload
+
+class CodeBlock(object):
+    """
+        A class representing a fully compiled output.
+    """
+
+    callable_functions = None
+
+    def __init__(self, callable_functions):
+        self.callable_functions = callable_functions
+
+    def disassemble(self):
+        result = ""
+        for callable_name in self.callable_functions:
+            result += "Callable Function %s: \n" % callable_name
+            result += self.callable_functions[callable_name].disassemble()
+        return result
 
 class Compiler(object):
     _comment_regex = re.compile("\\(.*?\\)", re.DOTALL)
-    _string_regex = re.compile("\".*?\"")
+    """
+        A regular expression pattern representing a comment. This is simply used to strip
+        out all commenting data as we don't need it.
+    """
+
+    _language_regex = re.compile(":.+|[\"]([^\"])+[\"]| *\S+ *")
+    """
+        A regular expression representing a token in the FORTH language. This is used to locate
+        all meaningful symbols within our input buffer.
+    """
 
     def __init__(self):
         pass
 
-    def compile_muf(self, payload):
-        result = [ ]
+    def get_tokens(self, input):
+        """
+            A list of lists where the second layer of lists is the token content that appeared on each
+            line from the top of the input buffer to the bottom.
 
-        # Any header bits in our input?
-        header_end = payload.find(":")
-        header_payload = payload[0:header_end].rstrip()
+            :parameters:
+                input - The input string.
+        """
 
-        global_variables = [ ]
-        local_variables = [ ]
-        if (header_payload != ""):
-            headers = header_payload.split("\n")
+        output = []
+        input = re.sub(self._comment_regex, "", input)
+        input = input.rstrip().lstrip()
 
-            for header in headers:
-                header_payload = header.split()
-                variable_type = header_payload[0]
-                variable_name = header_payload[1]
+        lines = input.split("\n")
+        for index, line in enumerate(lines):
+            line = line.rstrip().lstrip()
 
-                if (variable_type == "lvar"):
-                    local_variables.append(variable_name)
+            if line == "":
+                continue
+
+            line_data = {"text": line, "tokens": []}
+
+            # For each matching token, record the start and end positions as well as line
+            for match in re.finditer(self._language_regex, line):
+                token_data = {"line": index + 1, "start": match.start(), "end": match.end(), "text": match.group(0).lstrip().rstrip()}
+                line_data["tokens"].append(token_data)
+
+            output.append(line_data)
+
+        return output
+
+    def collapse_tokens(self, input):
+        """
+            Collapses the line delineated list of tokens down to a long list of tokens to process.
+
+            :parameters:
+                input - The input line data to process.
+        """
+
+        result = []
+        for line in input:
+            result += line["tokens"]
+        return result
+
+    def syntax_analysis(self, tokens):
+        """
+            Performs a syntax analysis on the input FORTH, ensuring that the syntax is correct.
+
+            :parameters:
+                tokens - The input tokens to process.
+        """
+
+        processed_code_block = False
+
+        def throw_error(error_message, token):
+            """
+                Helper function to throw an error with some useful information including visually where the problem lies.
+
+                :parameters:
+                    error_message - The message to throw.
+                    token - The offending token.
+            """
+            highlight_text = ""
+
+            for iteration in range(len(error_message) + token["start"]):
+                highlight_text += " "
+            highlight_text += "^"
+            error_message += line_data["text"]
+
+            helper_text = "The Error is Here---"
+            if len(helper_text) < len(highlight_text):
+                text_data = list(highlight_text)
+
+                start_index = (len(highlight_text) - 1) - len(helper_text)
+                for index, character in enumerate(helper_text):
+                    text_data[start_index + index] = character
+
+                highlight_text = "".join(text_data)
+
+            raise CompilerError("\n%s\n%s" % (error_message, highlight_text))
+
+        for line_data in tokens:
+            for token in line_data["tokens"]:
+                # If we're not processing a code block and our current token isn't one, we have an issue
+                if processed_code_block is False and token["text"][0] != ":":
+                    throw_error("Began FORTH programming, but no code block was declared on line %u, character %u: " % (token["line"], token["start"]), token)
+
+                # If we passed the above check, then we're good on code blocks
+                processed_code_block = True
+
+                # Any tokens with " at the beginning or end should be complete
+                token_end = len(token["text"]) - 1
+                if (token["text"][0] == "\"" and token["text"][token_end] != "\"") or (token["text"][token_end] == "\"" and token["text"][0] != "\""):
+                    throw_error("Found incomplete string on line %u, character %u: " % (token["line"], token["start"]), token)
+
+    def lexical_analysis(self, tokens):
+        """
+            Performs a lexical analysis on the input tokens. This is used to ensure that the program actually makes sense once it is verified to be syntactically
+            correct.
+        """
+
+        pass
+
+    def build_result(self, tokens):
+        """
+            Builds the final codeblock containing callable functions.
+
+            :parameters:
+                tokens - The input tokens.
+        """
+
+        result = {}
+        callable_data = None
+
+        current_callable_name = None
+        for token_data in tokens:
+            if token_data["text"][0] == ":":
+                current_callable_name = token_data["text"][1:].rstrip().lstrip()
+
+                if callable_data is not None:
+                    result[current_callable_name] = Callable(callable_data)
+
+                callable_data = []
+            else:
+                token_text = token_data["text"]
+                token_index_last = len(token_text) - 1
+
+                # If it is a number, add it as a codenumber
+                try:
+                    callable_data.append(CodeNumber(float(token_text)))
+                    continue
+                except ValueError:
+                    pass
+
+                if token_text[0] == "\"" and token_text[token_index_last] == "\"":
+                    callable_data.append(CodeString(token_text.rstrip("\"").lstrip("\"")))
                 else:
-                    global_variables.append(variable_name)
+                    callable_data.append(token_text)
 
-        payload = payload[header_end + 1:]
-        payload = self._first_stage(payload)
+        if current_callable_name is not None and callable_data is not None and len(callable_data) != 0:
+            result[current_callable_name] = Callable(callable_data)
 
-        name = payload[0][1:].strip()
-        payload = payload[1:]
-        if (payload.pop() != ";"):
-            print("ERROR")
+        return CodeBlock(result)
 
-        payload = self._second_stage(payload)
-        payload = self._third_stage(payload)
-
-        result = CodeBlock(name, payload)
-        result.local_variables = local_variables
-        result.global_variables = global_variables
-        return result
-
-    def _third_stage(self, payload):
+    def compile_forth(self, payload):
         """
-            In the third stage, we massage the conditions into something the
-            interpreter readily works with while also verifying that they're
-            property closed with a 'then' clause.
+            Builds the input FORTH into a usable interpreted sequence.
+
+            :parameters:
+                payload - The input string.
         """
 
-        # Our program should be symmetrical: if, else and then counts should be equal
-        if (not (payload.count("if") == payload.count("then") or payload.count("if") == payload.count("else"))):
-            return
+        tokens = self.get_tokens(payload)
+        self.syntax_analysis(tokens)
+        self.lexical_analysis(tokens)
 
-        # Process for every if in the payload
-        try:
-            current_if = payload.index("if")
-
-            while (True):
-                else_start = -1
-                then_start = -1
-
-                for iteration in range(current_if + 1, len(payload)):
-                    # We may cover multiple else's in a layered structure
-                    if (payload[iteration] == "else" and else_start == -1):
-                        else_start = iteration
-                    elif (payload[iteration] == "then"):
-                        then_start = iteration
-                        break
-
-                # Failed to figure out where these are
-                if (else_start == -1):
-                    print("Failed to find else")
-                    return
-                elif (then_start == -1):
-                    print("Failed to find then")
-                    return
-
-                # Remove the then clause by replacing with a nop
-                payload[then_start] = "nop"
-
-                # Where are our offsets?
-                then_offset = then_start - current_if
-                else_offset = else_start - current_if
-
-                # First, we overwrite the else with a jump
-                payload[else_start] = "jump"
-
-                # Write the jump payloads to offset the else and the then blocks by +2
-                payload.insert(else_start, str(then_offset + 1))
-                payload.insert(current_if, str(else_offset + 2))
-
-                # Loop foreach jump below us and correct their jump offsets by +2
-                for iteration in range(then_offset + 1, len(payload)):
-                    command = payload[iteration]
-                    if (command == "jump"):
-                        target_index = iteration - 1
-                        old_offset = int(payload[target_index])
-                        new_offset = int(payload[iteration - 1]) + 2
-
-                        payload[target_index] = str(new_offset)
-
-                current_if = payload.index("if", current_if + 3)
-        except ValueError:
-            pass
-
-        return payload
-
-    def _second_stage(self, payload):
-        """
-            In the second stage we try to sort out multiple commands per index
-            so that the code is fully serial from top to bottom with no extra
-            checking involved for the compiler.
-        """
-
-        result = [ ]
-        for line in payload:
-            # We can match at any position in the string, so we store matches and their locations
-            matches = { }
-            for string_match in re.finditer(self._string_regex, line):
-                string_text = string_match.group(0)
-                string_length = len(string_text)
-                string_start = string_match.start(0)
-                string_end = string_match.end(0)
-
-                # First modify any indices that come after us to be pos - length, we use this to order things correctly
-                current_matches = dict(matches)
-                for next_location in current_matches:
-                    next_text = matches[next_location]
-                    matches.remove(next_location)
-                    matches[next_location - string_length] = next_text
-
-                matches[string_start - 1] = string_text[1:len(string_text) - 1]
-                line = line[0:string_start] + line[string_end + 1:len(line)]
-
-            # Now we process foreach word
-            line = line.strip()
-
-            if (line != ""):
-                pointer = 0
-                words = line.split()
-
-                #print(matches)
-                for word in words:
-                    if (pointer in matches):
-                        matches[pointer + 1] = word
-                    else:
-                        matches[pointer] = word
-
-                    pointer = pointer + len(word)
-
-            # Now we build our lines
-            lines = [ ]
-
-            match_locations = matches.keys()
-            match_locations.sort()
-            for match_location in match_locations:
-                lines.append(matches[match_location])
-            result.extend(lines)
-
-        return result
-
-    def _first_stage(self, payload):
-        """
-            The first stage of our compilation process strips off commenting
-            and massages the data down to a list of at least 1 command per index
-            and may also contain portions of strings that span multiple indices.
-            It is the job of stage two to sort these out.
-        """
-        payload = re.sub(self._comment_regex, "", payload)
-
-        # Now we remove the various spaces floating around
-        payload = payload.replace("\r", "")
-        payload = payload.split("\n")
-
-        result = [ ]
-        for line in payload:
-            line = line.strip().rstrip()
-
-            if (line != ""):
-                result.append(line)
-
-        return result
+        tokens = self.collapse_tokens(tokens)
+        return self.build_result(tokens)
