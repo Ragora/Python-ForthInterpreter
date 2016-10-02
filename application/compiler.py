@@ -33,7 +33,7 @@ class CodeNumber(object):
         self.data = number
 
     def __repr__(self):
-        return "<CodeNumber %f>" % self.data
+        return "<CodeNumber %u>" % self.data
 
 class CodeString(object):
     """
@@ -246,7 +246,7 @@ class Compiler(object):
 
                 # If it is a number, add it as a codenumber
                 try:
-                    callable_data.append(CodeNumber(float(token_text)))
+                    callable_data.append(CodeNumber(int(token_text)))
                     continue
                 except ValueError:
                     pass

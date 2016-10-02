@@ -55,16 +55,16 @@ class InterpreterRuntimeError(InterpreterError):
         for index, snapshot in enumerate(self.interpreter.frame_snapshots):
             stack, pointer = snapshot
 
-            if pointer < 0 or pointer >= len(self.interpreter.codeblock.payload):
+            if pointer < 0 or pointer >= len(self.interpreter.callable.payload):
                 pointer = "%u <Out of Bounds>" % pointer
             else:
-                pointer = "%u (%s)" % (pointer, self.interpreter.codeblock.payload[pointer])
+                pointer = "%u (%s)" % (pointer, self.interpreter.callable.payload[pointer])
 
             snapshots = "%s\n        Frame %u, EIP %s %s" % (snapshots, index, pointer, stack)
 
         # Build a program disassembly
         disassembly = ""
-        for command in self.interpreter.codeblock.payload:
+        for command in self.interpreter.callable.payload:
             disassembly = "%s\n        %s" % (disassembly, command)
 
         output = """
@@ -82,7 +82,7 @@ class InterpreterRuntimeError(InterpreterError):
         %s
 
         """ % (repr(self.reason), self.interpreter.stack, self.interpreter.instruction_pointer, snapshots,
-        len(self.interpreter.codeblock.payload), disassembly)
+        len(self.interpreter.callable.payload), disassembly)
 
         return output
 
@@ -103,16 +103,17 @@ class Interpreter(object):
     global_variables = None
     local_variables = None
 
-    codeblock = None
+    callable = None
     """
-        The codeblock in use by this interpreter.
+        The callable in use by this interpreter.
     """
 
     instruction_pointer = None
     """
         The current instruction pointer of the interpreter. This should not be
         written directly as unintended behavior may occur. Please use jump_target
-        instead if you desire to modify this at run time.
+        instead if you desire to modify this at run time. If this is ever False,
+        the interpreter will perform a successful exit.
     """
 
     jump_target = None
@@ -133,6 +134,11 @@ class Interpreter(object):
         execute method.
     """
 
+    loop_starts = []
+    """
+        The starting indices in loops that our program has to keep track of.
+    """
+
     stack_debug = True
     frame_snapshots = None
 
@@ -140,48 +146,58 @@ class Interpreter(object):
         self.commands = { }
         self.init_builtin_commands()
 
+        self.stack = []
         self.global_variables = { }
 
-    def execute(self, codeblock):
+    def execute(self, callable):
         """
-            Executes the given FORTH codeblock produced by the compiler.
+            Executes the given FORTH callable produced by the compiler.
         """
-        if (type(codeblock) is not compiler.CodeBlock):
-            raise InterpreterTypeError("Cannot use non-Codeblock types with execute!")
+        if (type(callable) is not compiler.Callable):
+            raise InterpreterTypeError("Cannot use non-Callable types with execute!")
 
-        self.stack = [ ]
-        self.codeblock = codeblock
+        self.callable = callable
         self.local_variables = { }
         self.instruction_pointer = 0
         self.command_count = 0
         self.frame_snapshots = [ ]
 
         try:
-            while (self.instruction_pointer < len(self.codeblock.payload)):
-                if (self.jump_target is not None):
-                    self.instruction_pointer = self.jump_target
-                    self.jump_target = None
-
+            while self.instruction_pointer < len(self.callable.payload):
                 if (self.stack_debug is True):
                     self.frame_snapshots.append((list(self.stack), self.instruction_pointer))
 
-                line = self.codeblock.payload[self.instruction_pointer]
-                if (line not in self.commands):
-                    self.stack.append(line)
-                else:
-                    self.commands[line](self)
+                # Read the next operation to perform
+                operation = self.callable.payload[self.instruction_pointer]
 
-                self.instruction_pointer = self.instruction_pointer + 1
+                # If it is a special type, append the payload
+                if type(operation) is compiler.CodeString or type(operation) is compiler.CodeNumber:
+                    self.stack.append(operation.data)
+                else:
+                    self.commands[operation](self)
+
+                # Exit execution
+                if self.instruction_pointer is False:
+                    break
+
+                # Perform a jump if instructed to
+                if (self.jump_target is not None):
+                    self.instruction_pointer = self.jump_target
+                    self.jump_target = None
+                else:
+                    self.instruction_pointer = self.instruction_pointer + 1
+
                 if (self.command_count >= self.command_maximum and self.command_maximum > 0):
                     print("Terminated: Maximum of %u commands exceeded." % self.command_maximum)
                     return
 
                 self.command_count = self.command_count + 1
         except StandardError as e:
+            print(traceback.format_exc())
             exc_type, exc_obj, exc_tb = sys.exc_info()
             raise InterpreterRuntimeError(self, e, (exc_type, exc_obj, exc_tb))
 
-        self.codeblock = None
+        self.callable = None
 
     def init_builtin_commands(self):
         """
@@ -201,16 +217,40 @@ class Interpreter(object):
         self.commands["/"] = builtins.div
         self.commands["%"] = builtins.mod
 
+        # Stack manipulations
+        self.commands["over"] = builtins.over
+
+        # Bitwise
+        self.commands["rot"] = builtins.rot
+
+        # Comparisons
+        self.commands["<"] = builtins.less_than
+        self.commands[">"] = builtins.greater_than
+        self.commands[">="] = builtins.less_than_equal
+        self.commands["<="] = builtins.greater_than_equal
+
         # Control flow
         self.commands["="] = builtins.equals
         self.commands["if"] = builtins.ifblock
         self.commands["jump"] = builtins.jump
+        self.commands["not"] = builtins.not_command
+        self.commands["exit"] = builtins.exit
+        self.commands["else"] = builtins.elseblock
+
+        # Looping
+        self.commands["begin"] = builtins.begin
+        self.commands["until"] = builtins.until
 
         # Variables
         self.commands["!"] = builtins.store
         self.commands["@"] = builtins.fetch
 
+        # Etc
+        self.commands["name"] = lambda interp: interp.stack.append("Test")
+
         # Debug
         self.commands["print"] = builtins.println
         self.commands["_stack"] = builtins.print_stack
         self.commands["nop"] = builtins.nop
+        self.commands[";"] = builtins.nop
+        self.commands["then"] = builtins.nop
