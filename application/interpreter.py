@@ -65,14 +65,14 @@ class InterpreterRuntimeError(InterpreterError):
             snapshots = "%s\n        Frame %u, EIP %s in callable '%s': %s" % (snapshots, index, pointer, callable.name, stack)
 
         # To build the disassembly, we first pump out disassemblies for all the unique callables
-        disassembly = "\n\tCallable '%s'\n%s" % (self.interpreter.callable.name, self.interpreter.callable.disassemble())
+        disassembly = "\n\tCallable '%s'\n\tLength: %u\n\n%s" % (self.interpreter.callable.name, len(self.interpreter.callable.payload), self.interpreter.callable.disassemble())
         disassembled_callables = []
 
         for call in self.interpreter.call_stack:
             if call["callable"] in disassembled_callables:
                 continue
 
-            disassembly += "\n\tCallable '%s'\n%s" % (call["callable"].name, call["callable"].disassemble())
+            disassembly += "\n\tCallable '%s'\n\tLength: %u\n\n%s" % (call["callable"].name, len(call["callable"].payload), call["callable"].disassemble())
             disassembled_callables.append(call["callable"])
 
         output = """
@@ -85,12 +85,10 @@ class InterpreterRuntimeError(InterpreterError):
         Stack Frame Shapshots:
         %s
 
-        Program Length: %u
         Program Disassembly:
         %s
 
-        """ % (repr(self.reason), self.interpreter.stack, self.interpreter.instruction_pointer, self.interpreter.callable.name, snapshots,
-        len(self.interpreter.callable.payload), disassembly)
+        """ % (repr(self.reason), self.interpreter.stack, self.interpreter.instruction_pointer, self.interpreter.callable.name, snapshots, disassembly)
 
         return output
 
