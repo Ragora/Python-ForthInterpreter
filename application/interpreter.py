@@ -63,9 +63,7 @@ class InterpreterRuntimeError(InterpreterError):
             snapshots = "%s\n        Frame %u, EIP %s %s" % (snapshots, index, pointer, stack)
 
         # Build a program disassembly
-        disassembly = ""
-        for command in self.interpreter.callable.payload:
-            disassembly = "%s\n        %s" % (disassembly, command)
+        disassembly = self.interpreter.callable.disassemble()
 
         output = """
 
@@ -240,6 +238,8 @@ class Interpreter(object):
         # Looping
         self.commands["begin"] = builtins.begin
         self.commands["until"] = builtins.until
+        self.commands["while"] = builtins.whileblock
+        self.commands["repeat"] = builtins.repeat
 
         # Variables
         self.commands["!"] = builtins.store

@@ -71,13 +71,13 @@ class Callable(object):
     def disassemble(self):
         result = ""
 
-        for op in self.payload:
+        for index, op in enumerate(self.payload):
             if type(op) is CodeString:
-                result += "\t\"%s\"\n" % op.data
+                result += "\t(EIP %u): \"%s\"\n" % (index, op.data)
             elif type(op) is CodeNumber:
-                result += "\t%f\n" % op.data
+                result += "\t(EIP %u): %u\n" % (index, op.data)
             else:
-                result += "\t%s\n" % op
+                result += "\t(EIP %u): %s\n" % (index, op)
 
         return result
 
