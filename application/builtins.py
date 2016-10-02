@@ -345,3 +345,23 @@ def repeat(interp):
     """
 
     interp.jump_target = interp.loop_starts[len(interp.loop_starts) - 1]
+
+def call(interp):
+    """
+        The call operation calls a subroutine by name, jumping control flow to it until it returns.
+    """
+
+    name = interp.stack.pop()
+    callable = interp.callable_functions[name]
+    interp.call_stack.append({"eip": interp.instruction_pointer, "callable": interp.callable})
+    interp.jump_target = 0
+    interp.callable = callable
+
+def returnop(interp):
+    """
+        The return operation returns from the current subroutine.
+    """
+
+    return_to = interp.call_stack.pop()
+    interp.callable = return_to["callable"]
+    interp.jump_target = return_to["eip"] + 1

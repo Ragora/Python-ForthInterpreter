@@ -53,25 +53,35 @@ class InterpreterRuntimeError(InterpreterError):
         # Produce frame snapshots
         snapshots = ""
         for index, snapshot in enumerate(self.interpreter.frame_snapshots):
-            stack, pointer = snapshot
+            stack = snapshot["stack"]
+            pointer = snapshot["eip"]
+            callable = snapshot["callable"]
 
-            if pointer < 0 or pointer >= len(self.interpreter.callable.payload):
+            if pointer < 0 or pointer >= len(callable.payload):
                 pointer = "%u <Out of Bounds>" % pointer
             else:
-                pointer = "%u (%s)" % (pointer, self.interpreter.callable.payload[pointer])
+                pointer = "%u (%s)" % (pointer, callable.payload[pointer])
 
-            snapshots = "%s\n        Frame %u, EIP %s %s" % (snapshots, index, pointer, stack)
+            snapshots = "%s\n        Frame %u, EIP %s in callable '%s': %s" % (snapshots, index, pointer, callable.name, stack)
 
-        # Build a program disassembly
-        disassembly = self.interpreter.callable.disassemble()
+        # To build the disassembly, we first pump out disassemblies for all the unique callables
+        disassembly = "\n\tCallable '%s'\n%s" % (self.interpreter.callable.name, self.interpreter.callable.disassemble())
+        disassembled_callables = []
+
+        for call in self.interpreter.call_stack:
+            if call["callable"] in disassembled_callables:
+                continue
+
+            disassembly += "\n\tCallable '%s'\n%s" % (call["callable"].name, call["callable"].disassemble())
+            disassembled_callables.append(call["callable"])
 
         output = """
 
         The FORTH interpreter encountered a fatal error and could not continue.
         Reason: %s
 
-        Interpreter Stack: %s
-        Instruction Pointer: %u
+        Final Interpreter Stack: %s
+        Final Instruction Pointer: %u in callable '%s'
         Stack Frame Shapshots:
         %s
 
@@ -79,7 +89,7 @@ class InterpreterRuntimeError(InterpreterError):
         Program Disassembly:
         %s
 
-        """ % (repr(self.reason), self.interpreter.stack, self.interpreter.instruction_pointer, snapshots,
+        """ % (repr(self.reason), self.interpreter.stack, self.interpreter.instruction_pointer, self.interpreter.callable.name, snapshots,
         len(self.interpreter.callable.payload), disassembly)
 
         return output
@@ -137,15 +147,44 @@ class Interpreter(object):
         The starting indices in loops that our program has to keep track of.
     """
 
+    call_stack = None
+
+    callable_functions = None
+
     stack_debug = True
     frame_snapshots = None
 
     def __init__(self):
-        self.commands = { }
+        self.call_stack = []
+        self.commands = {}
+        self.callable_functions = {}
         self.init_builtin_commands()
 
         self.stack = []
-        self.global_variables = { }
+        self.global_variables = {}
+
+    def call(self, name):
+        """
+            Calls a callable function by name.
+
+            :parameters:
+                name - The function name to call.
+        """
+
+        callable = self.callable_functions[name]
+        self.execute(callable)
+
+    def register_codeblock(self, codeblock):
+        """
+            Registers a codeblock to the interpreter. This just takes all of the callables out of the codeblock and
+            allows them to be used within the interpreter as callable subroutines.
+
+            :parameters:
+                codeblock - The input codeblock to process.
+        """
+
+        for callable_name in codeblock.callable_functions:
+            self.callable_functions[callable_name] = codeblock.callable_functions[callable_name]
 
     def execute(self, callable):
         """
@@ -155,15 +194,15 @@ class Interpreter(object):
             raise InterpreterTypeError("Cannot use non-Callable types with execute!")
 
         self.callable = callable
-        self.local_variables = { }
+        self.local_variables = {}
         self.instruction_pointer = 0
         self.command_count = 0
-        self.frame_snapshots = [ ]
+        self.frame_snapshots = []
 
         try:
             while self.instruction_pointer < len(self.callable.payload):
                 if (self.stack_debug is True):
-                    self.frame_snapshots.append((list(self.stack), self.instruction_pointer))
+                    self.frame_snapshots.append({"stack": list(self.stack), "eip": self.instruction_pointer, "callable": self.callable})
 
                 # Read the next operation to perform
                 operation = self.callable.payload[self.instruction_pointer]
@@ -191,7 +230,6 @@ class Interpreter(object):
 
                 self.command_count = self.command_count + 1
         except StandardError as e:
-            print(traceback.format_exc())
             exc_type, exc_obj, exc_tb = sys.exc_info()
             raise InterpreterRuntimeError(self, e, (exc_type, exc_obj, exc_tb))
 
@@ -234,6 +272,8 @@ class Interpreter(object):
         self.commands["not"] = builtins.not_command
         self.commands["exit"] = builtins.exit
         self.commands["else"] = builtins.elseblock
+        self.commands["call"] = builtins.call
+        self.commands["return"] = builtins.returnop
 
         # Looping
         self.commands["begin"] = builtins.begin

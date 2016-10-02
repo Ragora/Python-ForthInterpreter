@@ -58,6 +58,8 @@ class Callable(object):
 
     payload = None
 
+    name = None
+
     global_variables = None
     """
         A list of all global variables declared on this specific codeblock.
@@ -81,7 +83,8 @@ class Callable(object):
 
         return result
 
-    def __init__(self, payload):
+    def __init__(self, payload, name):
+        self.name = name
         self.payload = payload
 
 class CodeBlock(object):
@@ -95,6 +98,14 @@ class CodeBlock(object):
         self.callable_functions = callable_functions
 
     def disassemble(self):
+        """
+            Produces a disassembly of the codeblock, calling the callable's disassemble
+            function for each instance.
+
+            :returns:
+                The disassembly in the form of a string.
+        """
+
         result = ""
         for callable_name in self.callable_functions:
             result += "Callable Function %s: \n" % callable_name
@@ -234,11 +245,10 @@ class Compiler(object):
         current_callable_name = None
         for token_data in tokens:
             if token_data["text"][0] == ":":
-                current_callable_name = token_data["text"][1:].rstrip().lstrip()
-
                 if callable_data is not None:
-                    result[current_callable_name] = Callable(callable_data)
+                    result[current_callable_name] = Callable(callable_data, current_callable_name)
 
+                current_callable_name = token_data["text"][1:].rstrip().lstrip()
                 callable_data = []
             else:
                 token_text = token_data["text"]
@@ -257,7 +267,7 @@ class Compiler(object):
                     callable_data.append(token_text)
 
         if current_callable_name is not None and callable_data is not None and len(callable_data) != 0:
-            result[current_callable_name] = Callable(callable_data)
+            result[current_callable_name] = Callable(callable_data, current_callable_name)
 
         return CodeBlock(result)
 
