@@ -12,6 +12,7 @@
 import os
 import sys
 import random
+import datetime
 import traceback
 
 import compiler
@@ -65,14 +66,14 @@ class InterpreterRuntimeError(InterpreterError):
             snapshots = "%s\n        Frame %u, EIP %s in callable '%s': %s" % (snapshots, index, pointer, callable.name, stack)
 
         # To build the disassembly, we first pump out disassemblies for all the unique callables
-        disassembly = "\n\tCallable '%s'\n\tLength: %u\n\n%s" % (self.interpreter.callable.name, len(self.interpreter.callable.payload), self.interpreter.callable.disassemble())
+        disassembly = "\n\tCallable '%s'\n\tLength: %u\n%s" % (self.interpreter.callable.name, len(self.interpreter.callable.payload), self.interpreter.callable.disassemble())
         disassembled_callables = []
 
         for call in self.interpreter.call_stack:
             if call["callable"] in disassembled_callables:
                 continue
 
-            disassembly += "\n\tCallable '%s'\n\tLength: %u\n\n%s" % (call["callable"].name, len(call["callable"].payload), call["callable"].disassemble())
+            disassembly += "\n\tCallable '%s'\n\tLength: %u\n%s" % (call["callable"].name, len(call["callable"].payload), call["callable"].disassemble())
             disassembled_callables.append(call["callable"])
 
         output = """
@@ -93,6 +94,11 @@ class InterpreterRuntimeError(InterpreterError):
         return output
 
 class Interpreter(object):
+    """
+        The interpreter is the meat and potatoes. This is the class that allows us to emulate some
+        specific FORTH device with parameters to control timing, known callable routines, and so on.
+    """
+
     commands = None
     """
         A dictionary of command names to python methods accepting a stack state.
@@ -146,11 +152,44 @@ class Interpreter(object):
     """
 
     call_stack = None
+    """
+        The call stack currently on the interpreter.
+    """
 
     callable_functions = None
+    """
+        A dictionary mapping names to callable FORTH code blocks.
+    """
 
     stack_debug = True
+    """
+        Whether or not the stack debugging feature should be enabled.
+    """
+
     frame_snapshots = None
+    """
+        If stack debugging is enabled, this is the list keeping track of the stack at
+        every op executed.
+    """
+
+    cycle_time = None
+    """
+        How long a cycle is in real time. Generally this should be set to one second
+        to roughly coincident with operations per second. If None, no artificial rate limit
+        is enforced.
+    """
+
+    cycle_ops = None
+    """
+        How many operations to run per cycle. When the operation count equals this number,
+        control flow is returned back to the Python program using the interpreter. This does not
+        require cycle_time to be specified.
+    """
+
+    last_update_time = None
+    """
+        The last time that the interpreter was updated.
+    """
 
     def __init__(self):
         self.call_stack = []
@@ -160,6 +199,7 @@ class Interpreter(object):
 
         self.stack = []
         self.global_variables = {}
+        self.last_update_time = datetime.datetime.now()
 
     def call(self, name):
         """
@@ -184,9 +224,66 @@ class Interpreter(object):
         for callable_name in codeblock.callable_functions:
             self.callable_functions[callable_name] = codeblock.callable_functions[callable_name]
 
+    def update(self):
+        """
+            Updates the interpreter. If no cycle time is specified, this will simply keep running until
+            program completion. Otherwise, it will only run for the specified cycle time.
+
+            :returns:
+                True for the interpreter completing the program execution. False otherwise.
+        """
+
+        current_op_count = 0
+        now = datetime.datetime.now()
+
+        if self.cycle_time is None or now - self.last_update_time >= self.cycle_time:
+            try:
+                while self.instruction_pointer < len(self.callable.payload):
+                    if self.cycle_ops is not None and current_op_count >= self.cycle_ops:
+                        return False
+
+                    if (self.stack_debug is True):
+                        self.frame_snapshots.append({"stack": list(self.stack), "eip": self.instruction_pointer, "callable": self.callable})
+
+                    # Read the next operation to perform
+                    operation = self.callable.payload[self.instruction_pointer]
+
+                    # If it is a special type, append the payload
+                    if type(operation) is compiler.CodeString or type(operation) is compiler.CodeNumber:
+                        self.stack.append(operation.data)
+                    else:
+                        self.commands[operation](self)
+
+                    # Exit execution
+                    if self.instruction_pointer is False:
+                        return True
+
+                    # Perform a jump if instructed to
+                    if (self.jump_target is not None):
+                        self.instruction_pointer = self.jump_target
+                        self.jump_target = None
+                    else:
+                        self.instruction_pointer = self.instruction_pointer + 1
+
+                    if (self.command_count >= self.command_maximum and self.command_maximum > 0):
+                        raise InterpreterRuntimeError("Terminated: Maximum of %u commands exceeded." % self.command_maximum)
+
+                    self.command_count = self.command_count + 1
+
+                    # Keep track of what our op count is for this cycle
+                    current_op_count = current_op_count + 1
+            except StandardError as e:
+                exc_type, exc_obj, exc_tb = sys.exc_info()
+                raise InterpreterRuntimeError(self, e, (exc_type, exc_obj, exc_tb))
+
+        return self.instruction_pointer == len(self.callable.payload)
+
     def execute(self, callable):
         """
             Executes the given FORTH callable produced by the compiler.
+
+            :parameters:
+                callable - The callable code block to execute.
         """
         if (type(callable) is not compiler.Callable):
             raise InterpreterTypeError("Cannot use non-Callable types with execute!")
@@ -197,41 +294,7 @@ class Interpreter(object):
         self.command_count = 0
         self.frame_snapshots = []
 
-        try:
-            while self.instruction_pointer < len(self.callable.payload):
-                if (self.stack_debug is True):
-                    self.frame_snapshots.append({"stack": list(self.stack), "eip": self.instruction_pointer, "callable": self.callable})
-
-                # Read the next operation to perform
-                operation = self.callable.payload[self.instruction_pointer]
-
-                # If it is a special type, append the payload
-                if type(operation) is compiler.CodeString or type(operation) is compiler.CodeNumber:
-                    self.stack.append(operation.data)
-                else:
-                    self.commands[operation](self)
-
-                # Exit execution
-                if self.instruction_pointer is False:
-                    break
-
-                # Perform a jump if instructed to
-                if (self.jump_target is not None):
-                    self.instruction_pointer = self.jump_target
-                    self.jump_target = None
-                else:
-                    self.instruction_pointer = self.instruction_pointer + 1
-
-                if (self.command_count >= self.command_maximum and self.command_maximum > 0):
-                    print("Terminated: Maximum of %u commands exceeded." % self.command_maximum)
-                    return
-
-                self.command_count = self.command_count + 1
-        except StandardError as e:
-            exc_type, exc_obj, exc_tb = sys.exc_info()
-            raise InterpreterRuntimeError(self, e, (exc_type, exc_obj, exc_tb))
-
-        self.callable = None
+        self.update()
 
     def init_builtin_commands(self):
         """
@@ -253,8 +316,6 @@ class Interpreter(object):
 
         # Stack manipulations
         self.commands["over"] = builtins.over
-
-        # Bitwise
         self.commands["rot"] = builtins.rot
 
         # Comparisons
@@ -262,9 +323,9 @@ class Interpreter(object):
         self.commands[">"] = builtins.greater_than
         self.commands[">="] = builtins.less_than_equal
         self.commands["<="] = builtins.greater_than_equal
+        self.commands["="] = builtins.equals
 
         # Control flow
-        self.commands["="] = builtins.equals
         self.commands["if"] = builtins.ifblock
         self.commands["jump"] = builtins.jump
         self.commands["not"] = builtins.not_command
@@ -272,6 +333,8 @@ class Interpreter(object):
         self.commands["else"] = builtins.elseblock
         self.commands["call"] = builtins.call
         self.commands["return"] = builtins.returnop
+        self.commands[";"] = builtins.nop
+        self.commands["then"] = builtins.nop
 
         # Looping
         self.commands["begin"] = builtins.begin
@@ -283,12 +346,7 @@ class Interpreter(object):
         self.commands["!"] = builtins.store
         self.commands["@"] = builtins.fetch
 
-        # Etc
-        self.commands["name"] = lambda interp: interp.stack.append("Test")
-
         # Debug
         self.commands["print"] = builtins.println
         self.commands["_stack"] = builtins.print_stack
         self.commands["nop"] = builtins.nop
-        self.commands[";"] = builtins.nop
-        self.commands["then"] = builtins.nop
